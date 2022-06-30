@@ -69,52 +69,33 @@ func toKelvin(temp int) int {
 	return int(kelvinFactor / temp)
 }
 
-func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	flag.Parse()
-
-	hostName, err := getMDNS()
+func getState(hostName string) state {
+	url := fmt.Sprintf(urlTemplate, hostName)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if hostName == "" {
-		log.Fatal("empty hostname")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
 	}
-	if *verbose {
-		log.Printf("Hostname: %s", hostName)
+	respJson, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		log.Fatal(err)
 	}
+	r := state{}
+	err = json.Unmarshal(respJson, &r)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return r
+}
 
-	args := flag.Args()
-	if len(args) != 1 {
-		log.Fatal("no command specified")
-	}
-
-	command := args[0]
-	s := state{
-		NumberOfLights: 1,
-		Lights:         []light{{}},
-	}
-	commandLower := strings.ToLower(command)
-	switch commandLower {
-	case "on":
-		s.Lights[0].On = 1
-	case "off":
-		s.Lights[0].On = 0
-	default:
-		log.Fatalf("bad command: %s", command)
-	}
-
-	if *brightness > 100 {
-		log.Fatal("brightness must be between 0 and 100")
-	}
-	s.Lights[0].Brightness = int(*brightness)
-	if *temperature != 0 {
-		if *temperature < 2900 || *temperature > 7000 {
-			log.Fatal("temperature must be between 2900 and 7000 (in Kelvins)")
-		}
-		s.Lights[0].Temperature = fromKelvin(int(*temperature))
-	}
-
+func putState(hostName string, s state) state {
+	url := fmt.Sprintf(urlTemplate, hostName)
 	jsonState, err := json.Marshal(s)
 	if err != nil {
 		log.Fatal(err)
@@ -122,8 +103,6 @@ func main() {
 	if *verbose {
 		log.Printf("request: %s", jsonState)
 	}
-
-	url := fmt.Sprintf(urlTemplate, hostName)
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(jsonState))
 	if err != nil {
 		log.Fatal(err)
@@ -140,12 +119,82 @@ func main() {
 		log.Fatal(err)
 	}
 	if *verbose {
-		log.Printf("response: %s", respJson)
-		var rState state
-		err := json.Unmarshal(respJson, &rState)
-		if err != nil {
-			log.Fatalf("bad JSON response: %s", respJson)
+		log.Printf("JSON response: %s", respJson)
+	}
+	r := state{}
+	err = json.Unmarshal(respJson, &r)
+	if err != nil {
+		log.Fatalf("bad JSON response: %s", respJson)
+	}
+	return r
+}
+
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	flag.Parse()
+
+	hostName, err := getMDNS()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if hostName == "" {
+		log.Fatal("empty hostname")
+	}
+	if *verbose {
+		log.Printf("Hostname: %s", hostName)
+	}
+
+	args := flag.Args()
+	if len(args) > 1 {
+		log.Fatal("only one command may be specified: on, off or toggle (default)")
+	}
+	if len(args) == 0 {
+		args = []string{"toggle"}
+	}
+
+	command := args[0]
+	s := state{
+		NumberOfLights: 1,
+		Lights:         []light{{}},
+	}
+	commandLower := strings.ToLower(command)
+	switch commandLower {
+	case "on":
+		s.Lights[0].On = 1
+	case "off":
+		s.Lights[0].On = 0
+	case "toggle":
+		s = getState(hostName)
+		if s.NumberOfLights != 1 {
+			log.Fatalf("expected one light, got %d", s.NumberOfLights)
 		}
+		if s.Lights[0].On == 0 {
+			s.Lights[0].On = 1
+		} else {
+			s.Lights[0].On = 0
+		}
+
+		// Don't change other properties
+		s.Lights[0].Brightness = 0
+		s.Lights[0].Temperature = 0
+	default:
+		log.Fatalf("bad command: %s", command)
+	}
+
+	if *brightness > 100 {
+		log.Fatal("brightness must be between 0 and 100")
+	}
+	s.Lights[0].Brightness = int(*brightness)
+	if *temperature != 0 {
+		if *temperature < 2900 || *temperature > 7000 {
+			log.Fatal("temperature must be between 2900 and 7000 (in Kelvins)")
+		}
+		s.Lights[0].Temperature = fromKelvin(int(*temperature))
+	}
+
+	rState := putState(hostName, s)
+
+	if *verbose {
 		log.Printf("temperature: %dK", toKelvin(rState.Lights[0].Temperature))
 	}
 }
