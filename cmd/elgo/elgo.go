@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oleksandr/bonjour"
 )
@@ -17,6 +18,7 @@ import (
 var brightness = flag.Uint("brightness", 0, "set brightness (between 1 and 100)")
 var temperature = flag.Uint("temperature", 0, "set color temperature (between 2900 (reddish) and 7000 (blueish)")
 var verbose = flag.Bool("v", false, "enable verbose output")
+var timeout = flag.Duration("timeout", 10*time.Second, "timeout (default 10s)")
 
 // From: https://help.elgato.com/hc/en-us/articles/4413403384845-mDNS-Service-Strings-for-Elgato-Devices
 const service = "_elg._tcp"
@@ -33,7 +35,12 @@ func getMDNS() (hostName string, err error) {
 	svcs := make(chan *bonjour.ServiceEntry)
 	wg.Add(1)
 	go func() {
-		svc := <-svcs
+		var svc *bonjour.ServiceEntry
+		select {
+		case svc = <-svcs:
+		case <-time.After(*timeout - time.Since(start)):
+			log.Fatalf("discovery timeout (%s)", *timeout)
+		}
 		if *verbose {
 			log.Printf("Service: %+v", svc)
 		}
@@ -76,7 +83,9 @@ func getState(hostName string) state {
 		log.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: *timeout - time.Since(start),
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
@@ -108,7 +117,9 @@ func putState(hostName string, s state) state {
 		log.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: *timeout - time.Since(start),
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
@@ -129,7 +140,10 @@ func putState(hostName string, s state) state {
 	return r
 }
 
+var start time.Time
+
 func main() {
+	start = time.Now()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.Parse()
 
